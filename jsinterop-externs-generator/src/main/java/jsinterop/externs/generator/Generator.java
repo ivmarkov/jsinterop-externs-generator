@@ -54,7 +54,7 @@ public class Generator {
 						Path innerPath;
 						
 						if(!singleFile) {
-							if(type.isInJsGlobalNamespace()) {
+							if(!type.isInJsGlobalNamespace()) {
 								innerPath = resolve(path, type.getJsNamespace());
 								Files.createDirectories(innerPath);
 							
@@ -63,7 +63,7 @@ public class Generator {
 									.forEach(namespace -> {
 										try {
 											try(PrintWriter internalWriter = new PrintWriter(new OutputStreamWriter(Files.newOutputStream(resolve(path, namespace).resolve("type-info.js"))))) {
-												new NamespaceGenerator(generatedNamespaces, namespace, onWindow, false/*recursive*/, writer).emit();
+												new NamespaceGenerator(generatedNamespaces, namespace, onWindow, false/*recursive*/, internalWriter).emit();
 											}
 										} catch(IOException e) {
 											throw new UncheckedIOException(e);

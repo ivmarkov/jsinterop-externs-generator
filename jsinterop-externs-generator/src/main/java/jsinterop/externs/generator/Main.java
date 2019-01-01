@@ -2,11 +2,12 @@ package jsinterop.externs.generator;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -23,53 +24,94 @@ import java.util.stream.StreamSupport;
 import jsinterop.externs.generator.asm.AsmTypeParser;
 import jsinterop.externs.generator.ast.JsNamed;
 import jsinterop.externs.generator.ast.Type;
+import picocli.CommandLine;
+import picocli.CommandLine.Option;
+import picocli.CommandLine.Parameters;
 
-public class Main {
-	private Path externsPath;
-	private boolean singleFile;
-	private Collection<Path> externTypesPath;
-	private Collection<Path> classPath;
+public class Main implements Runnable {
+	@Parameters(index = "0", arity="1", description = "A file or a directory where the externs will be generated")
+	protected Path externsPath;
+	
+	@Option(names = {"-s", "-singleFile"}, description = "Generate a single JavaScript file containing all externs")
+	protected boolean singleFile;
+	
+	@Option(names = {"-et", "-externtypes"}, split = ":")
+	protected Collection<Path> externTypesPath;
+	
+	@Option(names = {"-cp", "-classpath"}, split = ":")
+	protected Collection<Path> classPath;
+	
 	private Function<Path, ? extends Type> typeParser;
 
-	private Main(
+	protected Main() {
+		this.typeParser = AsmTypeParser::parse;
+	}
+	
+	protected Main(
 			Path externsPath,
 			boolean singleFile,
 			Collection<Path> externTypesPath,
-			Collection<Path> classPath,
-			Function<Path, ? extends Type> typeParser) {
+			Collection<Path> classPath) {
+		this();
 		this.externsPath = externsPath;
 		this.singleFile = singleFile;
 		this.externTypesPath = externTypesPath;
 		this.classPath = classPath;
-		this.typeParser = typeParser;
 	}
 
-	public void emit() throws IOException {
-		Collection<Type> externTypes = new ArrayList<>();
-		for(Path p: externTypesPath)
-			processPath(p, path -> getClassFiles(path)
-				.map(typeParser)
-				.forEach(externTypes::add));
-		
-		Map<String, Type> typesMap = new HashMap<>(externTypes.stream()
-			.collect(Collectors.toMap(Type::getClassName, Function.identity())));
-		
-		Collection<FileSystem> openedJars = new ArrayList<>();
-			
+	public void run() {
 		try {
-			Collection<Path> expandedClassPath = expandJars(classPath, openedJars);
+			Collection<Type> externTypes = new ArrayList<>();
+			for(Path p: externTypesPath)
+				processPath(p, path -> getClassFiles(path)
+					.map(typeParser)
+					.forEach(externTypes::add));
+			
+			Map<String, Type> typesMap = new HashMap<>(externTypes.stream()
+				.collect(Collectors.toMap(Type::getClassName, Function.identity())));
+			
+			Collection<FileSystem> openedJars = new ArrayList<>();
+				
+			try {
+				Collection<Path> expandedClassPath = expandJars(classPath, openedJars);
+	
+				URI zipUri;
+				Map<String, String> zipEnv;
+				if(!singleFile && (!Files.exists(externsPath) || !Files.isDirectory(externsPath))) {
+				    // Use a Zip filesystem URI
+					
+					Files.deleteIfExists(externsPath);
+				    
+				    URI fileUri = externsPath.toUri();
+				    zipUri = new URI("jar:" + fileUri.getScheme(), fileUri.getPath(), null);
 
-			new Generator(
-					externsPath, 
-					singleFile,
-					false/*onWindow*/,
-					key -> findType(expandedClassPath, key, typesMap).orElseThrow(() -> new IllegalStateException("Cannot find class " + key)),
-					key -> findType(expandedClassPath, key, typesMap).map(type -> (JsNamed)type).orElseGet(() -> fallbackTypeName(key)),
-					new HashSet<>())
-				.emit(externTypes.stream());
-		} finally {
-			for(FileSystem jar: openedJars)
-				jar.close();
+				    zipEnv = new HashMap<>();
+				    zipEnv.put("create", Boolean.TRUE.toString());
+				} else {
+					zipUri = null;
+					zipEnv = null;
+				}
+			
+				try(FileSystem zipFs = zipUri != null? FileSystems.newFileSystem(zipUri, zipEnv): null) {
+					Path expandedExternsPath = zipFs != null? zipFs.getRootDirectories().iterator().next(): externsPath;
+							
+					new Generator(
+							expandedExternsPath, 
+							singleFile,
+							false/*onWindow*/,
+							key -> findType(expandedClassPath, key, typesMap).orElseThrow(() -> new IllegalStateException("Cannot find class " + key)),
+							key -> findType(expandedClassPath, key, typesMap).map(type -> (JsNamed)type).orElseGet(() -> fallbackTypeName(key)),
+							new HashSet<>())
+						.emit(externTypes.stream());
+				}
+			} finally {
+				for(FileSystem jar: openedJars)
+					jar.close();
+			}
+		} catch(IOException e) {
+			throw new UncheckedIOException(e);
+		} catch(URISyntaxException e) {
+			throw new RuntimeException(e);
 		}
 	}
 	
@@ -163,28 +205,29 @@ public class Main {
 		
 		return pathStr.endsWith(".zip") || pathStr.endsWith(".jar");
 	}
-	
-	public static void main(String[] args) throws IOException {
-		Path externsPath = Paths.get("C:", "Users", "h151861", "externs.js");
+
+	public static void main(String[] args) throws Exception {
+		CommandLine.run(new Main(), args);
 		
-		boolean singleFile = true;
-		
-		Collection<Path> externTypesPath = Arrays.asList(Paths.get("C:", "Users", "h151861", "git", "portal", "CPGWT_Lib", "bin"));
-		
-		Collection<Path> classPath = Arrays.asList(
-			Paths.get("C:", "Users", "h151861", "git", "portal", "CP_ServerAPI", "bin"),
-			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.github.gwtreact", "gwt-react", "jars", "gwt-react-1.0.0.jar"),
-			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.github.gwtreact", "gwt-interop-utils", "jars", "gwt-interop-utils-1.0.0.jar"),
-			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.elemental2", "elemental2-core", "jars", "elemental2-core-1.0.0-RC1.jar"),
-			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.elemental2", "elemental2-dom", "jars", "elemental2-dom-1.0.0-RC1.jar"),
-			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.gwt", "gwt-user", "jars", "gwt-user-2.8.2.jar"));
-		
-		new Main(
-				externsPath, 
-				singleFile, 
-				externTypesPath, 
-				classPath,
-				AsmTypeParser::parse)
-			.emit();
+//		Path externsPath = Paths.get("C:", "Users", "h151861", "externs.js");
+//		
+//		boolean singleFile = true;
+//		
+//		Collection<Path> externTypesPath = Arrays.asList(Paths.get("C:", "Users", "h151861", "git", "portal", "CPGWT_Lib", "bin"));
+//		
+//		Collection<Path> classPath = Arrays.asList(
+//			Paths.get("C:", "Users", "h151861", "git", "portal", "CP_ServerAPI", "bin"),
+//			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.github.gwtreact", "gwt-react", "jars", "gwt-react-1.0.0.jar"),
+//			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.github.gwtreact", "gwt-interop-utils", "jars", "gwt-interop-utils-1.0.0.jar"),
+//			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.elemental2", "elemental2-core", "jars", "elemental2-core-1.0.0-RC1.jar"),
+//			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.elemental2", "elemental2-dom", "jars", "elemental2-dom-1.0.0-RC1.jar"),
+//			Paths.get("C:", "Users", "h151861", ".cp", "ivy_HEAD", "caches", "main", "com.google.gwt", "gwt-user", "jars", "gwt-user-2.8.2.jar"));
+//		
+//		new Main(
+//				externsPath, 
+//				singleFile, 
+//				externTypesPath, 
+//				classPath)
+//			.emit();
 	}
 }
