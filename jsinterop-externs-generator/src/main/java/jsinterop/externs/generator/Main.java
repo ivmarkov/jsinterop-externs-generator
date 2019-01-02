@@ -29,16 +29,16 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
 
 public class Main implements Runnable {
-	@Parameters(index = "0", arity="1", description = "A file or a directory where the externs will be generated")
+	@Parameters(index = "0", arity="1", description = "A file or a directory where to generate the externs")
 	protected Path externsPath;
 	
-	@Option(names = {"-s", "-singleFile"}, description = "Generate a single JavaScript file containing all externs")
+	@Option(names = {"-s", "-singlefile"}, description = "Put all generated externs in a single JavaScript file")
 	protected boolean singleFile;
 	
-	@Option(names = {"-et", "-externtypes"}, split = ":")
+	@Option(names = {"-et", "-externtypes"}, split = ":", description = "A sequence of directories and/or JAR files containing native JS types for which externs should be generated")
 	protected Collection<Path> externTypesPath;
 	
-	@Option(names = {"-cp", "-classpath"}, split = ":")
+	@Option(names = {"-cp", "-classpath"}, split = ":", description = "A sequence of directories and/or JAR files containing types referenced from native JS types")
 	protected Collection<Path> classPath;
 	
 	private Function<Path, ? extends Type> typeParser;
